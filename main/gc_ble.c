@@ -23,7 +23,7 @@ static QueueHandle_t gatt_msg_queue = NULL;
 char BLE_NAME[20] = "HuafuSmartdog_GC";
 int temp;
 const char *NMAE;
-uint8_t reply_data[4]={0xAA,0xAF,0x02,0x00};
+uint8_t reply_data[4] = {0xAA, 0xAF, 0x02, 0x00};
 #define GATTS_TABLE_TAG "GATTS_TABLE_DEMO"
 
 #define PROFILE_NUM 1
@@ -327,6 +327,7 @@ uint8_t gatt_send(uint8_t *val, uint16_t len)
 }
 
 bool BLE_Connected = false;
+extern QueueHandle_t data_get_queue;
 static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param)
 {
 	switch (event)
@@ -367,20 +368,35 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
 	case ESP_GATTS_WRITE_EVT:
 		if (!param->write.is_prep)
 		{
-
+			eTaskState TaskState = eTaskGetState(&Send_Handle); //获取query_task任务的任务状态
+			ESP_LOGI(TAG, "TaskState:%d", TaskState);
+			if (TaskState != eReady) //如果正在挂起的控制才恢复
+			{
+				if (pdPASS != xTaskCreate(&send_data, "send_data", 4096, NULL, 5, &Send_Handle))
+				{
+					ESP_LOGI(TAG, "send task create fail!");
+				}
+				else
+				{
+					ESP_LOGI(TAG, "send task create succeed!");
+				}
+			}
 			printf("ble receive data :\r\n");
 			for (int i = 0; i < (param->write.len); i++)
 				printf("0x%x ", param->write.value[i]);
 			printf("\r\n");
-			if(param->write.value[2] == 0x99 && param->write.value[3] == 0x99)
+			if (param->write.value[2] == 0x99 && param->write.value[3] == 0x99)
 			{
 				printf("查询！");
-				gatt_send(reply_data,4);
+				gatt_send(reply_data, 4);
 			}
 			else
-				memcpy(Txbuffer,param->write.value,8);
-			//	app_msg_recv(param->write.value, param->write.len);
-			// }
+			{
+				// memset(Txbuffer,0,sizeof(Txbuffer));
+				memcpy(Txbuffer, param->write.value, 8);
+				//xQueueSend(data_get_queue, param->write.value, 0);
+			}
+
 			ESP_LOGD(GATTS_TABLE_TAG, "ESP_GATTS_READ_EVT,handle = %d,gatt_if = %d,connid=%d,handle_table[%d]",
 					 param->write.handle, gatts_if, param->write.conn_id, heart_rate_handle_table[IDX_CHAR_VAL_A]);
 			if (heart_rate_handle_table[IDX_CHAR_CFG_A] == param->write.handle && param->write.len == 2)
@@ -440,9 +456,9 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
 		memcpy(conn_params.bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
 		/* For the iOS system, please refer to Apple official documents about the BLE connection parameters restrictions. */
 		conn_params.latency = 0;
-		conn_params.max_int = 0x10; // max_int = 0x20*1.25ms = 40ms
-		conn_params.min_int = 0x00; // min_int = 0x10*1.25ms = 20ms
-		conn_params.timeout = 0x0a; // timeout = 400*10ms = 4000ms
+		conn_params.max_int = 0x20; // max_int = 0x20*1.25ms = 40ms
+		conn_params.min_int = 0x06; // min_int = 0x10*1.25ms = 20ms
+		conn_params.timeout = 0x40; // timeout = 400*10ms = 4000ms
 		//start sent the update connection parameters to the peer device.
 		esp_ble_gap_update_conn_params(&conn_params);
 
@@ -649,12 +665,19 @@ void bt_task(void *parameter)
 		ESP_LOGE(GATTS_TABLE_TAG, "gap register error, error code = %x", ret);
 		return;
 	}
+	ret = esp_ble_gatts_app_register(ESP_APP_ID);
+	if (ret)
+	{
+		ESP_LOGE(GATTS_TABLE_TAG, "gatts app register error, error code = %x", ret);
+		return;
+	}
 	esp_err_t local_mtu_ret = esp_ble_gatt_set_local_mtu(500);
 	if (local_mtu_ret)
 	{
 		ESP_LOGE(GATTS_TABLE_TAG, "set local  MTU failed, error code = %x", local_mtu_ret);
 	}
-	ble_gatts_init();
+
+	//	ble_gatts_init();
 	while (1)
 	{
 		vTaskDelay(2000 / portTICK_PERIOD_MS);

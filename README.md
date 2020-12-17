@@ -1,2 +1,1 @@
-# ESP32_GroupControl
- 
+ - esp as a tcp server or client 

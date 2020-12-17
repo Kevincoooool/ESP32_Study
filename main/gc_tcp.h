@@ -41,7 +41,7 @@ extern "C" {
 
 #define SOFT_AP_PAS "99999999" //如果密码设置为空，则配置的热点是开放的，没有密码的。
 
-#define SOFT_AP_MAX_CONNECT 20 //作为AP热点时候，最大的连接数目
+#define SOFT_AP_MAX_CONNECT 15 //作为AP热点时候，最大的连接数目
 
 
 //以下是station模式配置信息,是您家里的路由器的信息
@@ -56,12 +56,12 @@ extern "C" {
 //统一的端口号，包括TCP客户端或者服务端
 #define TCP_PORT 5000
 
-
+extern TaskHandle_t Send_Handle;
 /* FreeRTOS event group to signal when we are connected to wifi*/
 extern EventGroupHandle_t tcp_event_group;
 #define WIFI_CONNECTED_BIT BIT0
 
-extern int  g_total_data;
+extern uint64_t  g_total_data;
 extern bool g_rxtx_need_restart;
 
 #if EXAMPLE_ESP_TCP_PERF_TX && EXAMPLE_ESP_TCP_DELAY_INFO

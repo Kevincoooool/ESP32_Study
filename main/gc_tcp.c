@@ -19,6 +19,7 @@
 #include "gc_tcp.h"
 #include "driver/uart.h"
 #include "lcd.h"
+#include "freertos/queue.h"
 /* FreeRTOS event group to signal when we are connected to wifi */
 EventGroupHandle_t tcp_event_group;
 
@@ -30,7 +31,7 @@ static unsigned int socklen = sizeof(client_addr);
 static int connect_socket = 0;
 bool g_rxtx_need_restart = false;
 uint8_t Connect_cnt = 0;
-int g_total_data = 0;
+uint64_t g_total_data = 0;
 extern uint8_t reply_data[4];
 struct sockinfo
 {
@@ -93,19 +94,21 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
 	return ESP_OK;
 }
 int receive_sock = 0;
+uint8_t *databuff = NULL;
+TaskHandle_t Recv_Handle = NULL;
 void Receive_One(void *pvParameters)
 {
 	int len = 0;
-
-	char databuff[1024];
+	if (databuff == NULL)
+		databuff = malloc(20);
 
 	while (1)
 	{
 		if (reply_data[3])
 		{
 			//每次接收都要清空接收数组
-			memset(databuff, 0x00, sizeof(databuff));
-			len = recv(receive_sock, databuff, sizeof(databuff), 0);
+			//memset(databuff, 0x00, 20);
+			len = recv(receive_sock, databuff, 20, 0);
 			g_rxtx_need_restart = false;
 			if (len > 0)
 			{
@@ -114,7 +117,7 @@ void Receive_One(void *pvParameters)
 				//把从机器虎收到的数据发给APP
 				// strcat(dev_id,databuff);
 				//send(receive_sock, databuff, len, 0);
-				gatt_send((uint8_t *)databuff, len);
+				gatt_send(databuff, len);
 			}
 			else
 			{
@@ -125,42 +128,41 @@ void Receive_One(void *pvParameters)
 #endif
 			}
 		}
+		vTaskDelay(100);
 	}
 
 	close_socket();
 	//	g_rxtx_need_restart = true;
 	vTaskDelete(NULL);
 }
+QueueHandle_t data_get_queue;
 //send data
 void send_data(void *pvParameters)
 {
-	int write_len = 0;
-	char uart_data[8] = {0xa5, 0xfa, 0X00, 0x81, 0x00, 0x03, 0x23, 0xfb};
-	int i = 0;
+	static int write_len = 0;
+	static int i = 0;
 	ESP_LOGI(TAG, "start sending...");
-	// uart_config_t uart_config =
-	// 	{
-	// 		.baud_rate = 115200,
-	// 		.data_bits = UART_DATA_8_BITS,
-	// 		.parity = UART_PARITY_DISABLE,
-	// 		.stop_bits = UART_STOP_BITS_1,
-	// 		.flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-	// 		.rx_flow_ctrl_thresh = 120,
-	// 		.use_ref_tick = 0,
-	// 	};
-	// uart_param_config(UART_NUM_0, &uart_config);
-	// uart_set_pin(UART_NUM_0, GPIO_NUM_1, GPIO_NUM_3, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE); //tx   rx   rts cts
-	// uart_driver_install(UART_NUM_0, 1024 * 10, 1024 * 10, 20, NULL, 0);
-
+	static uint8_t Valid_cnt = 0;
+	static int Valid_sock[20] = {0};
+	static char Rxbuffer[20] = {0};
+	static char Txbuffer1[8] = {0xa5, 0xfa, 0x0 , 0x81 , 0x0 , 0x1 , 0x21 , 0xfb};
+	/* 创建消息队列 */
+	data_get_queue = xQueueCreate(10, sizeof(Rxbuffer));
+	if (data_get_queue == NULL)
+	{
+		/* 没有创建成功，用户可以在这里加入创建失败的处理机制 */
+	}
 	while (1)
 	{
-		uint8_t Valid_cnt = 0;
-		int Valid_sock[100] = {0};
+
+		
+
+		Valid_cnt = 0;
+		memset(Valid_sock, 0, sizeof(Valid_sock));
 		for (i = 0; i < Connect_cnt; i++)
 		{
 			//发送前先检测每个socket是否正常
-			if (check_working_socket(remoteInfo[i].sock) || get_socket_error_code(remoteInfo[i].sock) == 5  \
-			|| get_socket_error_code(remoteInfo[i].sock) == 110)
+			if (check_working_socket(remoteInfo[i].sock) || get_socket_error_code(remoteInfo[i].sock) == 5 || get_socket_error_code(remoteInfo[i].sock) == 110 || get_socket_error_code(remoteInfo[i].sock) == 119)
 			{
 				shutdown(remoteInfo[i].sock, 0);
 				close(remoteInfo[i].sock);
@@ -177,10 +179,25 @@ void send_data(void *pvParameters)
 		}
 		reply_data[3] = Valid_cnt;
 		receive_sock = Valid_sock[Valid_cnt - 1];
+		printf("Valid_cnt:%d   Connect_cnt :%d   \n", Valid_cnt, Connect_cnt);
 		// Read data from the UART
 		// int len = uart_read_bytes(UART_NUM_0, uart_data, 20, 5 / portTICK_RATE_MS);
 		if (Valid_cnt && Txbuffer[0] != 0)
 		{
+
+			eTaskState TaskState = eTaskGetState(&Recv_Handle); //获取query_task任务的任务状态
+			ESP_LOGI(TAG, "TaskState:%d", TaskState);
+			if (TaskState != eReady) //如果正在挂起的控制才恢复
+			{
+				if (pdPASS != xTaskCreate(&Receive_One, "Receive_One", 4096, NULL, 5, &Recv_Handle))
+				{
+					ESP_LOGI(TAG, "Receive_One task create fail!");
+				}
+				else
+				{
+					ESP_LOGI(TAG, "Receive_One task create succeed!");
+				}
+			}
 			ESP_LOGI(TAG, "已有%d个客户端连接!当前有效客户端列表：", Valid_cnt);
 			for (uint8_t i = 0; i < Valid_cnt; i++)
 				printf("%d: sock:%d  ", i, Valid_sock[i]);
@@ -194,6 +211,7 @@ void send_data(void *pvParameters)
 				}
 				else
 				{
+					printf("%d: send error sock:%d  ", i, Valid_sock[i]);
 					int err = get_socket_error_code(Valid_sock[i]);
 					if (err != ENOMEM)
 					{
@@ -203,13 +221,15 @@ void send_data(void *pvParameters)
 					}
 				}
 			}
-			memset(Txbuffer, 0, 8);
 		}
-		vTaskDelay(100);
-	}
-	g_rxtx_need_restart = true;
 
-	vTaskDelete(NULL);
+		memset(Txbuffer, 0, sizeof(Txbuffer));
+		// xQueueReceive(data_get_queue, Rxbuffer, portMAX_DELAY);
+		vTaskDelay(1000);
+	}
+	//	g_rxtx_need_restart = true;
+
+	//	vTaskDelete(NULL);
 }
 
 //receive data
@@ -217,13 +237,14 @@ void recv_data(void *pvParameters)
 {
 	int len = 0;
 
-	char databuff[1024];
+	char *databuff = malloc(20);
 
 	while (1)
 	{
+
 		//每次接收都要清空接收数组
-		memset(databuff, 0x00, sizeof(databuff));
-		len = recv(connect_socket, databuff, sizeof(databuff), 0);
+		memset(databuff, 0x00, 20);
+		len = recv(connect_socket, databuff, 20, 0);
 		g_rxtx_need_restart = false;
 		if (len > 0)
 		{
@@ -231,7 +252,7 @@ void recv_data(void *pvParameters)
 			//打印接收到的数组
 			ESP_LOGI(TAG, "recvData: %s\n", databuff);
 			//原路返回，不指定某个客户端
-			send(connect_socket, databuff, sizeof(databuff), 0);
+			send(connect_socket, databuff, len, 0);
 			//sendto(connect_socket, databuff , sizeof(databuff), 0, (struct sockaddr *) &remote_addr,sizeof(remote_addr));
 		}
 		else
@@ -255,7 +276,7 @@ esp_err_t create_tcp_server(bool isCreatServer)
 
 	if (is_crate)
 	{
-		if (pdPASS != xTaskCreate(&send_data, "send_data", 4096, NULL, 4, &Send_Handle))
+		if (pdPASS != xTaskCreate(&send_data, "send_data", 8196, NULL, 5, &Send_Handle))
 		{
 			ESP_LOGI(TAG, "send task create fail!");
 		}
@@ -263,7 +284,14 @@ esp_err_t create_tcp_server(bool isCreatServer)
 		{
 			ESP_LOGI(TAG, "send task create succeed!");
 		}
-
+		if (pdPASS != xTaskCreate(&Receive_One, "Receive_One", 8196, NULL, 5, &Recv_Handle))
+		{
+			ESP_LOGI(TAG, "Receive task create fail!");
+		}
+		else
+		{
+			ESP_LOGI(TAG, "Receive task create succeed!");
+		}
 		is_crate = false;
 		ESP_LOGI(TAG, "server socket....,port=%d", TCP_PORT);
 		server_socket = socket(AF_INET, SOCK_STREAM, 0);
@@ -299,7 +327,7 @@ esp_err_t create_tcp_server(bool isCreatServer)
 	ESP_LOGI(TAG, "TaskState:%d", TaskState);
 	if (TaskState != eReady) //如果正在挂起的控制才恢复
 	{
-		if (pdPASS != xTaskCreate(&send_data, "send_data", 4096, NULL, 4, &Send_Handle))
+		if (pdPASS != xTaskCreate(&send_data, "send_data", 4096, NULL, 5, &Send_Handle))
 		{
 			ESP_LOGI(TAG, "send task create fail!");
 		}
@@ -327,10 +355,10 @@ esp_err_t create_tcp_server(bool isCreatServer)
 		close(server_socket);
 		return ESP_FAIL;
 	}
-	int keepAlive = 1;		 // 开启keepalive属性
-	int keepIdle = 20000000; // 如该连接在60秒内没有任何数据往来,则进行探测
-	int keepInterval = 5;	 // 探测时发包的时间间隔为5 秒
-	int keepCount = 3;		 // 探测尝试的次数.如果第1次探测包就收到响应了,则后2次的不再发.
+	int keepAlive = 1;	  // 开启keepalive属性
+	int keepIdle = 10;  // 如该连接在60秒内没有任何数据往来,则进行探测
+	int keepInterval = 5; // 探测时发包的时间间隔为5 秒
+	int keepCount = 3;	  // 探测尝试的次数.如果第1次探测包就收到响应了,则后2次的不再发.
 
 	setsockopt(remoteInfo[Connect_cnt].sock, SOL_SOCKET, SO_KEEPALIVE, (void *)&keepAlive, sizeof(keepAlive));
 	setsockopt(remoteInfo[Connect_cnt].sock, IPPROTO_TCP, TCP_KEEPIDLE, (void *)&keepIdle, sizeof(keepIdle));
@@ -343,14 +371,8 @@ esp_err_t create_tcp_server(bool isCreatServer)
 	for (uint8_t i = 0; i < Connect_cnt; i++)
 		printf("%d: sock:%d  ip: %s \n", i, remoteInfo[i].sock, remoteInfo[i].remoteIp);
 
-	if (pdPASS != xTaskCreate(&Receive_One, "Receive_One", 4096, NULL, 4, &Send_Handle))
-	{
-		ESP_LOGI(TAG, "Receive_One task create fail!");
-	}
-	else
-	{
-		ESP_LOGI(TAG, "Receive_One task create succeed!");
-	}
+	receive_sock = remoteInfo[Connect_cnt].sock;
+
 	return ESP_OK;
 }
 
@@ -471,7 +493,8 @@ int check_working_socket(int sock_num)
 	ret = get_socket_error_code(sock_num);
 	if (ret != 0)
 	{
-		//		ESP_LOGW(TAG, "server socket error %d %s", ret, strerror(ret));
+		ESP_LOGW(TAG, "server socket error %d %s", ret, strerror(ret));
+		return ret;
 	}
 	if (ret == ECONNRESET)
 	{

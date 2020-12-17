@@ -115,21 +115,21 @@ extern bool BLE_Connected;
 static void st7789(void *pvParameters)
 {
 	LCD_Init(); //LCD初始化
-	LCD_Fill(0, 0, LCD_W, LCD_H, LGRAY);
+	LCD_Fill(0, 0, LCD_W, LCD_H, GRAY);
 	while (1)
 	{
-		LCD_ShowString(10, 0, (uint8_t *)"WIFI SSID: GC_CTR", BLACK, LGRAY, 16, 0);
-		LCD_ShowString(10, 17, (uint8_t *)"PASS WORD: 99999999", BLACK, LGRAY, 16, 0);
-		LCD_ShowString(10, 33, (uint8_t *)"BLE: HuafuSmartdog_GC", BLACK, LGRAY, 16, 0);
+		LCD_ShowString(10, 0, (uint8_t *)"WIFI SSID: GC_CTR", BLACK, GRAY, 16, 0);
+		LCD_ShowString(10, 17, (uint8_t *)"PASS WORD: 99999999", BLACK, GRAY, 16, 0);
+		LCD_ShowString(10, 33, (uint8_t *)"BLE: HuafuSmartdog_GC", BLACK, GRAY, 16, 0);
 		if (BLE_Connected)
-			LCD_ShowString(10, 50, (uint8_t *)"BLEConnected..", GREEN, LGRAY, 32, 0);
+			LCD_ShowString(10, 50, (uint8_t *)"BLEConnected..", GREEN, GRAY, 32, 0);
 		else
-			LCD_ShowString(10, 50, (uint8_t *)"Disconnected..", RED, LGRAY, 32, 0);
+			LCD_ShowString(10, 50, (uint8_t *)"Disconnected..", RED, GRAY, 32, 0);
 
-		LCD_ShowString(10, 95, (uint8_t *)"Connected:", BLACK, LGRAY, 32, 0);
-		LCD_ShowIntNum(190, 95, reply_data[3], 2, RED, LGRAY, 32);
+		LCD_ShowString(10, 95, (uint8_t *)"Connected:", BLACK, GRAY, 32, 0);
+		LCD_ShowIntNum(190, 95, reply_data[3], 2, RED, GRAY, 32);
 
-		vTaskDelay(10);
+		vTaskDelay(1000);
 	}
 }
 
@@ -153,7 +153,8 @@ void app_main(void)
 	wifi_init_sta();
 #endif
 
-	xTaskCreate(&bt_task, "bt_task", 4096, NULL, 5, NULL);
+	
 	xTaskCreate(&tcp_conn, "tcp_conn", 4096, NULL, 5, NULL);
 	xTaskCreate(&st7789, "st7789", 4096, NULL, 5, NULL);
+	xTaskCreate(&bt_task, "bt_task", 4096, NULL, 5, NULL);
 }
